@@ -28,6 +28,13 @@ ballPart.CanCollide, ballPart.CanTouch = true, true
 local ATTACH_DISTANCE = 6          -- studs
 local KICK_POWER      = 65         -- impulse strength
 local UPWARD_BOOST    = 18         -- extra Y impulse
+----------------------------------------------------------------
+-- NEW tunables
+----------------------------------------------------------------
+local PICKUP_SPEED_LIMIT = 2      -- studs/s – ball must be slower than this
+local POST_KICK_COOLDOWN = 0.3    -- seconds   – grace period before it can re-attach
+
+
 
 ----------------------------------------------------------------
 -- Attach / detach helpers
@@ -67,6 +74,12 @@ local function kick(plr)
 
 	local impulse = (root.CFrame.LookVector * KICK_POWER + Vector3.new(0, UPWARD_BOOST, 0))
 	ballPart:ApplyImpulse(impulse * ballPart.AssemblyMass)
+
+local function attachToPlayer(plr)
+    if ballPart:GetAttribute("Holder") then return end
+    if ballPart:GetAttribute("Cooling") then return end          -- 🔹 ignore right after a kick
+    if ballPart.AssemblyLinearVelocity.Magnitude > PICKUP_SPEED_LIMIT then return end  -- 🔹 ignore fast balls
+    ...
 end
 
 ----------------------------------------------------------------
@@ -127,3 +140,16 @@ Players.PlayerRemoving:Connect(function(plr)
 		kick(plr)
 	end
 end)
+----------------------------------------------------------------
+-- Kick helper  (insert the cooldown block at the very end) 🔽
+----------------------------------------------------------------
+local function kick(plr)
+    ...
+    ballPart:ApplyImpulse(impulse * ballPart.AssemblyMass)
+
+    -- 🔹 Start a short “cooling” flag so the ball can clear the player’s hitbox
+    ballPart:SetAttribute("Cooling", true)
+    task.delay(POST_KICK_COOLDOWN, function()
+        ballPart:SetAttribute("Cooling", nil)
+    end)
+end
