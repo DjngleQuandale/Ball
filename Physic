@@ -1,0 +1,102 @@
+
+--  Parent: the MeshPart or Model that represents your football
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local BALL            = script.Parent           -- the football object
+local KICK_EVENT      = ReplicatedStorage:WaitForChild("KickBallEvent")
+
+--------------------------------------------------------------
+-- Tunables
+--------------------------------------------------------------
+local ATTACH_DISTANCE = 6          -- studs – how close a player must be
+local KICK_POWER      = 65         -- higher = farther / harder
+local UPWARD_BOOST    = 18         -- extra lift on each kick (studs /s)
+
+--------------------------------------------------------------
+-- Helper: attach ball to a character
+--------------------------------------------------------------
+local function attach(ball, player)
+	-- Ignore if already held
+	if ball:GetAttribute("Holder") then return end
+
+	local char = player.Character
+	if not char then return end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	-- Weld ball to the player
+	local weld       = Instance.new("WeldConstraint")
+	weld.Name        = "BallWeld"
+	weld.Part0       = ball
+	weld.Part1       = root
+	weld.Parent      = ball
+
+	-- Make physics ownership client-side for smooth motion
+	ball:SetNetworkOwner(player)
+
+	ball.AssemblyLinearVelocity = Vector3.zero
+	ball.CanCollide             = false
+	ball:SetAttribute("Holder", player.UserId)
+end
+
+--------------------------------------------------------------
+-- Helper: detach and kick
+--------------------------------------------------------------
+local function kick(ball, player)
+	if ball:GetAttribute("Holder") ~= player.UserId then return end
+
+	local char = player.Character
+	if not char then return end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	-- Remove weld
+	local weld = ball:FindFirstChild("BallWeld")
+	if weld then weld:Destroy() end
+
+	ball.CanCollide = true
+	ball:SetAttribute("Holder", nil)
+	ball:SetNetworkOwnershipAuto()
+
+	-- Apply an impulse in the player's look direction + upward boost
+	local impulseDir = root.CFrame.LookVector * KICK_POWER + Vector3.new(0, UPWARD_BOOST, 0)
+	-- force = impulseDir * mass
+	ball:ApplyImpulse(impulseDir * ball.AssemblyMass)
+end
+
+--------------------------------------------------------------
+-- Touch – auto-pickup when you walk into the ball
+--------------------------------------------------------------
+BALL.Touched:Connect(function(hit)
+	local char   = hit.Parent
+	local player = Players:GetPlayerFromCharacter(char)
+	if not player then return end
+
+	-- Only pick up if close enough to the HumanoidRootPart
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if root and (root.Position - BALL.Position).Magnitude <= ATTACH_DISTANCE then
+		attach(BALL, player)
+	end
+end)
+
+--------------------------------------------------------------
+-- RemoteEvent – handle X-key kicks from clients
+--------------------------------------------------------------
+KICK_EVENT.OnServerEvent:Connect(function(player)
+	kick(BALL, player)
+end)
+
+--------------------------------------------------------------
+-- Clean up if a player resets
+--------------------------------------------------------------
+Players.PlayerRemoving:Connect(function(plr)
+	if BALL:GetAttribute("Holder") == plr.UserId then
+		BALL:SetAttribute("Holder", nil)
+		local weld = BALL:FindFirstChild("BallWeld")
+		if weld then weld:Destroy() end
+		BALL.CanCollide = true
+		BALL:SetNetworkOwnershipAuto()
+	end
+end)
