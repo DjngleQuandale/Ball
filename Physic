@@ -72,11 +72,32 @@ end
 ----------------------------------------------------------------
 -- 1) Auto-pickup when *any* limb touches the ball
 ----------------------------------------------------------------
-ballPart.Touched:Connect(function(hit)
-	local plr = Players:GetPlayerFromCharacter(hit.Parent)
-	if not plr then return end
-	attachToPlayer(plr)
-end)
+local function attachToPlayer(plr)
+	if ballPart:GetAttribute("Holder") ~= nil then return end
+
+	local char = plr.Character
+	if not char then return end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	----------------------------------------------------------------
+	-- NEW: move the ball to a consistent offset before welding
+	----------------------------------------------------------------
+	local FRONT_OFFSET    = 3       -- studs in front of the torso
+	local DOWN_OFFSET     = -3      -- studs down so it sits at foot level
+	-- Root-space → world-space
+	ballPart.CFrame       = root.CFrame * CFrame.new(0, DOWN_OFFSET, -FRONT_OFFSET)
+
+	-- Weld it so it stays right there
+	local weld            = Instance.new("WeldConstraint")
+	weld.Name, weld.Part0, weld.Part1 = "BallWeld", ballPart, root
+	weld.Parent           = ballPart
+
+	ballPart:SetNetworkOwner(plr)
+	ballPart.AssemblyLinearVelocity = Vector3.zero
+	ballPart.CanCollide = false
+	ballPart:SetAttribute("Holder", plr.UserId)
+end
 
 ----------------------------------------------------------------
 -- 2) Extra safety: every 0.2 s look for nearby players
