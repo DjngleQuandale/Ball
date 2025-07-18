@@ -1,102 +1,108 @@
-
---  Parent: the MeshPart or Model that represents your football
+--  ★  BallServerFix.lua
+--  Parent: EITHER the MeshPart itself OR the Model that contains the MeshPart
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
-local BALL            = script.Parent           -- the football object
-local KICK_EVENT      = ReplicatedStorage:WaitForChild("KickBallEvent")
+local KICK_EVENT = ReplicatedStorage:WaitForChild("KickBallEvent")
 
---------------------------------------------------------------
--- Tunables
---------------------------------------------------------------
-local ATTACH_DISTANCE = 6          -- studs – how close a player must be
-local KICK_POWER      = 65         -- higher = farther / harder
-local UPWARD_BOOST    = 18         -- extra lift on each kick (studs /s)
-
---------------------------------------------------------------
--- Helper: attach ball to a character
---------------------------------------------------------------
-local function attach(ball, player)
-	-- Ignore if already held
-	if ball:GetAttribute("Holder") then return end
-
-	local char = player.Character
-	if not char then return end
-	local root = char:FindFirstChild("HumanoidRootPart")
-	if not root then return end
-
-	-- Weld ball to the player
-	local weld       = Instance.new("WeldConstraint")
-	weld.Name        = "BallWeld"
-	weld.Part0       = ball
-	weld.Part1       = root
-	weld.Parent      = ball
-
-	-- Make physics ownership client-side for smooth motion
-	ball:SetNetworkOwner(player)
-
-	ball.AssemblyLinearVelocity = Vector3.zero
-	ball.CanCollide             = false
-	ball:SetAttribute("Holder", player.UserId)
+----------------------------------------------------------------
+-- Locate the actual physics part ("ballPart")
+----------------------------------------------------------------
+local function getBallPart(container)
+	if container:IsA("BasePart") then
+		return container
+	else
+		return container:FindFirstChildWhichIsA("BasePart") or error("No BasePart found in football")
+	end
 end
 
---------------------------------------------------------------
--- Helper: detach and kick
---------------------------------------------------------------
-local function kick(ball, player)
-	if ball:GetAttribute("Holder") ~= player.UserId then return end
+local ballPart = getBallPart(script.Parent)
+ballPart.Anchored = false
+ballPart.CanCollide, ballPart.CanTouch = true, true
 
-	local char = player.Character
+----------------------------------------------------------------
+-- Tunables
+----------------------------------------------------------------
+local ATTACH_DISTANCE = 6          -- studs
+local KICK_POWER      = 65         -- impulse strength
+local UPWARD_BOOST    = 18         -- extra Y impulse
+
+----------------------------------------------------------------
+-- Attach / detach helpers
+----------------------------------------------------------------
+local function attachToPlayer(plr)
+	if ballPart:GetAttribute("Holder") ~= nil then return end
+
+	local char = plr.Character
 	if not char then return end
 	local root = char:FindFirstChild("HumanoidRootPart")
 	if not root then return end
 
-	-- Remove weld
-	local weld = ball:FindFirstChild("BallWeld")
+	-- Weld
+	local weld = Instance.new("WeldConstraint")
+	weld.Name, weld.Part0, weld.Part1 = "BallWeld", ballPart, root
+	weld.Parent = ballPart
+
+	ballPart:SetNetworkOwner(plr)
+	ballPart.AssemblyLinearVelocity = Vector3.zero
+	ballPart.CanCollide = false
+	ballPart:SetAttribute("Holder", plr.UserId)
+end
+
+local function kick(plr)
+	if ballPart:GetAttribute("Holder") ~= plr.UserId then return end
+
+	local char = plr.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	local weld = ballPart:FindFirstChild("BallWeld")
 	if weld then weld:Destroy() end
 
-	ball.CanCollide = true
-	ball:SetAttribute("Holder", nil)
-	ball:SetNetworkOwnershipAuto()
+	ballPart.CanCollide = true
+	ballPart:SetAttribute("Holder", nil)
+	ballPart:SetNetworkOwnershipAuto()
 
-	-- Apply an impulse in the player's look direction + upward boost
-	local impulseDir = root.CFrame.LookVector * KICK_POWER + Vector3.new(0, UPWARD_BOOST, 0)
-	-- force = impulseDir * mass
-	ball:ApplyImpulse(impulseDir * ball.AssemblyMass)
+	local impulse = (root.CFrame.LookVector * KICK_POWER + Vector3.new(0, UPWARD_BOOST, 0))
+	ballPart:ApplyImpulse(impulse * ballPart.AssemblyMass)
 end
 
---------------------------------------------------------------
--- Touch – auto-pickup when you walk into the ball
---------------------------------------------------------------
-BALL.Touched:Connect(function(hit)
-	local char   = hit.Parent
-	local player = Players:GetPlayerFromCharacter(char)
-	if not player then return end
+----------------------------------------------------------------
+-- 1) Auto-pickup when *any* limb touches the ball
+----------------------------------------------------------------
+ballPart.Touched:Connect(function(hit)
+	local plr = Players:GetPlayerFromCharacter(hit.Parent)
+	if not plr then return end
+	attachToPlayer(plr)
+end)
 
-	-- Only pick up if close enough to the HumanoidRootPart
-	local root = char:FindFirstChild("HumanoidRootPart")
-	if root and (root.Position - BALL.Position).Magnitude <= ATTACH_DISTANCE then
-		attach(BALL, player)
+----------------------------------------------------------------
+-- 2) Extra safety: every 0.2 s look for nearby players
+--    (covers rare cases where .Touched is missed or disabled)
+----------------------------------------------------------------
+RunService.Heartbeat:Connect(function()
+	if ballPart:GetAttribute("Holder") then return end  -- already held
+	for _, plr in ipairs(Players:GetPlayers()) do
+		local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+		if root and (root.Position - ballPart.Position).Magnitude <= ATTACH_DISTANCE then
+			attachToPlayer(plr)
+			break
+		end
 	end
 end)
 
---------------------------------------------------------------
--- RemoteEvent – handle X-key kicks from clients
---------------------------------------------------------------
-KICK_EVENT.OnServerEvent:Connect(function(player)
-	kick(BALL, player)
-end)
+----------------------------------------------------------------
+-- 3) RemoteEvent: player pressed X
+----------------------------------------------------------------
+KICK_EVENT.OnServerEvent:Connect(kick)
 
---------------------------------------------------------------
--- Clean up if a player resets
---------------------------------------------------------------
+----------------------------------------------------------------
+-- 4) Clean up if the holder leaves
+----------------------------------------------------------------
 Players.PlayerRemoving:Connect(function(plr)
-	if BALL:GetAttribute("Holder") == plr.UserId then
-		BALL:SetAttribute("Holder", nil)
-		local weld = BALL:FindFirstChild("BallWeld")
-		if weld then weld:Destroy() end
-		BALL.CanCollide = true
-		BALL:SetNetworkOwnershipAuto()
+	if ballPart:GetAttribute("Holder") == plr.UserId then
+		kick(plr)
 	end
 end)
