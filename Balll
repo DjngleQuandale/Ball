@@ -1,0 +1,99 @@
+
+local MESH_ID         = "rbxassetid://120274671757399" -- replace with your football mesh
+local BALL_SIZE       = Vector3.new(2, 2, 2)      -- studs (≈ default soccer size)
+local ATTACH_DISTANCE = 6                         -- how close a player must be to “pick up” ball
+local KICK_POWER      = 120                       -- horizontal launch speed
+local KICK_UP_FORCE   = 30                        -- extra upward boost
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
+
+----------------------------------------------------------------
+-- RemoteEvent that clients call when they want to kick
+----------------------------------------------------------------
+local kickEvent        = Instance.new("RemoteEvent")
+kickEvent.Name         = "KickFootball"
+kickEvent.Parent       = ReplicatedStorage
+
+----------------------------------------------------------------
+-- Spawn (or reuse) the football
+----------------------------------------------------------------
+local ball             = workspace:FindFirstChild("Football") or Instance.new("MeshPart")
+ball.Name              = "Football"
+ball.MeshId            = MESH_ID
+ball.Size              = BALL_SIZE
+ball.TextureID         = ""               -- optional texture
+ball.Material          = Enum.Material.SmoothPlastic
+ball.CastShadow        = false
+ball.CanCollide        = true
+ball.Position          = Vector3.new(0, 10, 0) -- drop point; change as needed
+ball.Parent            = workspace
+ball:SetNetworkOwner(nil)                 -- keep physics on the server
+
+----------------------------------------------------------------
+-- State storage
+----------------------------------------------------------------
+local attachedTo       = nil              -- Character currently holding the ball
+local weld             = nil              -- WeldConstraint used while attached
+
+----------------------------------------------------------------
+-- Helper functions
+----------------------------------------------------------------
+local function attachBall(character)
+	-- Weld ball to player’s HumanoidRootPart
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	ball.CanCollide = false
+	ball.Massless   = true
+
+	weld            = Instance.new("WeldConstraint")
+	weld.Part0      = ball
+	weld.Part1      = hrp
+	weld.Parent     = ball
+
+	attachedTo      = character
+end
+
+local function detachBall()
+	if weld then
+		weld:Destroy()
+		weld = nil
+	end
+	ball.CanCollide = true
+	ball.Massless   = false
+	attachedTo      = nil
+end
+
+----------------------------------------------------------------
+-- Continuous proximity check
+----------------------------------------------------------------
+RunService.Heartbeat:Connect(function()
+	if attachedTo then return end      -- already attached
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		local char = player.Character
+		local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+		if hrp and (hrp.Position - ball.Position).Magnitude <= ATTACH_DISTANCE then
+			attachBall(char)
+			break
+		end
+	end
+end)
+
+----------------------------------------------------------------
+-- Kick handler
+----------------------------------------------------------------
+kickEvent.OnServerEvent:Connect(function(player)
+	if not attachedTo or player.Character ~= attachedTo then return end
+
+	local hrp = attachedTo:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	detachBall()
+
+	-- Give the ball a nice boot!
+	ball.AssemblyLinearVelocity =
+		hrp.CFrame.LookVector * KICK_POWER + Vector3.new(0, KICK_UP_FORCE, 0)
+end)
